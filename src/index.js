@@ -102,7 +102,7 @@ client.on('interactionCreate', async interaction => {
         // Track error
         monitoringService.trackError(error.message);
         await interaction.reply({ 
-            content: 'There was an error while executing this command!!', 
+            content: 'There was an error while executing this command!', 
             ephemeral: true 
         });
     }

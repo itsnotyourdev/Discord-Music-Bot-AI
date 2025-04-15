@@ -2,12 +2,19 @@ import { joinVoiceChannel, createAudioPlayer, createAudioResource } from '@disco
 import ytdl from '@distube/ytdl-core';
 import { config } from '../config/config.js';
 import { G4F } from 'g4f';
+import { google } from 'googleapis';
 
 class MusicService {
     constructor() {
         this.queues = new Map();
         this.players = new Map();
         this.g4f = new G4F();
+        this.youtube = google.youtube('v3');
+        this.oauth2Client = new google.auth.OAuth2(
+            config.youtube.clientId,
+            config.youtube.clientSecret,
+            config.youtube.redirectUri
+        );
     }
 
     async getRecommendations(currentSong) {
@@ -99,7 +106,7 @@ class MusicService {
             // If the query is not a URL, search YouTube
             if (!ytdl.validateURL(query)) {
                 try {
-                    // Use YouTube Data API v3 for faster search
+                    // Use YouTube Data API v3 with API key
                     const searchQuery = encodeURIComponent(query);
                     const apiUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${searchQuery}&type=video&key=${config.youtube.apiKey}&maxResults=1`;
                     

@@ -17,6 +17,14 @@ export const config = {
         quality: 'highest'
     },
 
+    // YouTube API configuration
+    youtube: {
+        clientId: process.env.YOUTUBE_CLIENT_ID,
+        clientSecret: process.env.YOUTUBE_CLIENT_SECRET,
+        redirectUri: process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:3000/oauth2callback',
+        apiKey: process.env.YOUTUBE_API_KEY // Fallback for simple API key
+    },
+
     // AI configuration
     ai: {
         model: 'gemini-1.5-flash',
