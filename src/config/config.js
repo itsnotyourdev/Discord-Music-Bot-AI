@@ -19,10 +19,14 @@ export const config = {
 
     // YouTube API configuration
     youtube: {
-        clientId: process.env.YOUTUBE_CLIENT_ID,
-        clientSecret: process.env.YOUTUBE_CLIENT_SECRET,
-        redirectUri: process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:3000/oauth2callback',
-        apiKey: process.env.YOUTUBE_API_KEY // Fallback for simple API key
+        apiKey: process.env.YOUTUBE_API_KEY
+    },
+
+    // Spotify API configuration
+    spotify: {
+        clientId: process.env.SPOTIFY_CLIENT_ID,
+        clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+        redirectUri: process.env.SPOTIFY_REDIRECT_URI || 'http://localhost:3000/callback'
     },
 
     // AI configuration

@@ -2,54 +2,148 @@ import { joinVoiceChannel, createAudioPlayer, createAudioResource } from '@disco
 import ytdl from '@distube/ytdl-core';
 import { config } from '../config/config.js';
 import { G4F } from 'g4f';
-import { google } from 'googleapis';
+import SpotifyWebApi from 'spotify-web-api-node';
 
 class MusicService {
     constructor() {
         this.queues = new Map();
         this.players = new Map();
         this.g4f = new G4F();
-        this.youtube = google.youtube('v3');
-        this.oauth2Client = new google.auth.OAuth2(
-            config.youtube.clientId,
-            config.youtube.clientSecret,
-            config.youtube.redirectUri
-        );
+        this.spotifyApi = new SpotifyWebApi({
+            clientId: config.spotify.clientId,
+            clientSecret: config.spotify.clientSecret,
+            redirectUri: config.spotify.redirectUri
+        });
+        this.initializeSpotify();
+    }
+
+    async initializeSpotify() {
+        try {
+            const data = await this.spotifyApi.clientCredentialsGrant();
+            this.spotifyApi.setAccessToken(data.body['access_token']);
+            console.log('Spotify API initialized successfully');
+        } catch (error) {
+            console.error('Error initializing Spotify API:', error);
+        }
+    }
+
+    async searchSpotify(query) {
+        try {
+            const searchResult = await this.spotifyApi.searchTracks(query, { limit: 1 });
+            if (!searchResult.body.tracks.items.length) {
+                return null;
+            }
+
+            const track = searchResult.body.tracks.items[0];
+            return {
+                title: track.name,
+                artist: track.artists[0].name,
+                url: track.external_urls.spotify,
+                duration: Math.floor(track.duration_ms / 1000),
+                thumbnail: track.album.images[0]?.url,
+                previewUrl: track.preview_url
+            };
+        } catch (error) {
+            console.error('Error searching Spotify:', error);
+            return null;
+        }
     }
 
     async getRecommendations(currentSong) {
         try {
             console.log('Getting recommendations for:', currentSong.title);
             
-            // Try different search queries to get varied results
-            const searchQueries = [
-                `${currentSong.title} similar songs`,
-                `${currentSong.title} related songs`,
-                `songs like ${currentSong.title}`,
-                `music similar to ${currentSong.title}`
-            ];
-            
+            // First, try to get Spotify recommendations
             let recommendations = [];
             
-            // Try each search query until we get some recommendations
-            for (const query of searchQueries) {
-                const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
-                const response = await fetch(searchUrl);
-                const html = await response.text();
+            if (currentSong.spotifyUrl) {
+                try {
+                    // Extract track ID from Spotify URL
+                    const trackId = currentSong.spotifyUrl.split('/').pop();
+                    const response = await this.spotifyApi.getRecommendations({
+                        seed_tracks: [trackId],
+                        limit: 5
+                    });
+
+                    if (response.body.tracks && response.body.tracks.length > 0) {
+                        recommendations = response.body.tracks.map(track => ({
+                            title: track.name,
+                            artist: track.artists[0].name,
+                            url: track.external_urls.spotify,
+                            duration: Math.floor(track.duration_ms / 1000),
+                            thumbnail: track.album.images[0]?.url
+                        }));
+                    }
+                } catch (error) {
+                    console.error('Error getting Spotify recommendations:', error);
+                }
+            }
+
+            // If no Spotify recommendations, use AI
+            if (recommendations.length === 0) {
+                try {
+                    const prompt = `Based on the song "${currentSong.title}"${currentSong.artist ? ` by ${currentSong.artist}` : ''}, suggest 5 similar songs that would be good to play next. 
+                    Return only the song titles and artists in this format: "Song Title - Artist Name", one per line.`;
+
+                    const response = await this.g4f.chatCompletion({
+                        messages: [{ role: "user", content: prompt }],
+                        model: config.ai.model
+                    });
+
+                    const aiSuggestions = response.choices[0].message.content
+                        .split('\n')
+                        .filter(line => line.trim())
+                        .slice(0, 5);
+
+                    // Convert AI suggestions to Spotify search queries
+                    for (const suggestion of aiSuggestions) {
+                        try {
+                            const searchResult = await this.spotifyApi.searchTracks(suggestion, { limit: 1 });
+                            if (searchResult.body.tracks.items.length > 0) {
+                                const track = searchResult.body.tracks.items[0];
+                                recommendations.push({
+                                    title: track.name,
+                                    artist: track.artists[0].name,
+                                    url: track.external_urls.spotify,
+                                    duration: Math.floor(track.duration_ms / 1000),
+                                    thumbnail: track.album.images[0]?.url
+                                });
+                            }
+                        } catch (error) {
+                            console.error('Error searching Spotify for suggestion:', error);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error getting AI recommendations:', error);
+                }
+            }
+
+            // If still no recommendations, fall back to YouTube-based search
+            if (recommendations.length === 0) {
+                const searchQueries = [
+                    `${currentSong.title} similar songs`,
+                    `${currentSong.title} related songs`,
+                    `songs like ${currentSong.title}`,
+                    `music similar to ${currentSong.title}`
+                ];
                 
-                // Extract video titles from the search results
-                const titleMatches = html.matchAll(/"title":{"runs":\[{"text":"([^"]+)"}\],"accessibility"/g);
-                const titles = Array.from(titleMatches).map(match => match[1]);
-                
-                // Filter out the current song and add to recommendations
-                const newRecommendations = titles
-                    .filter(title => title !== currentSong.title)
-                    .slice(0, 5);
-                
-                recommendations = [...recommendations, ...newRecommendations];
-                
-                if (recommendations.length >= 5) {
-                    break;
+                for (const query of searchQueries) {
+                    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+                    const response = await fetch(searchUrl);
+                    const html = await response.text();
+                    
+                    const titleMatches = html.matchAll(/"title":{"runs":\[{"text":"([^"]+)"}\],"accessibility"/g);
+                    const titles = Array.from(titleMatches).map(match => match[1]);
+                    
+                    const newRecommendations = titles
+                        .filter(title => title !== currentSong.title)
+                        .slice(0, 5);
+                    
+                    recommendations = [...recommendations, ...newRecommendations];
+                    
+                    if (recommendations.length >= 5) {
+                        break;
+                    }
                 }
             }
             
@@ -101,50 +195,85 @@ class MusicService {
 
             // Search for the song
             console.log(`Searching for: ${query}`);
-            let videoUrl = query;
-            
-            // If the query is not a URL, search YouTube
+            let song = null;
+
+            // Try Spotify search first
             if (!ytdl.validateURL(query)) {
-                try {
-                    // Use YouTube Data API v3 with API key
-                    const searchQuery = encodeURIComponent(query);
-                    const apiUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${searchQuery}&type=video&key=${config.youtube.apiKey}&maxResults=1`;
-                    
-                    const response = await fetch(apiUrl);
-                    const data = await response.json();
-                    
-                    if (!data.items || data.items.length === 0) {
-                        throw new Error('No results found!');
+                const spotifyTrack = await this.searchSpotify(query);
+                if (spotifyTrack) {
+                    // Use the track name and artist to search YouTube
+                    const youtubeQuery = `${spotifyTrack.title} ${spotifyTrack.artist} official audio`;
+                    try {
+                        const searchQuery = encodeURIComponent(youtubeQuery);
+                        const apiUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${searchQuery}&type=video&key=${config.youtube.apiKey}&maxResults=1`;
+                        
+                        const response = await fetch(apiUrl);
+                        const data = await response.json();
+                        
+                        if (data.items && data.items.length > 0) {
+                            const videoId = data.items[0].id.videoId;
+                            const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+                            
+                            // Get video info
+                            const videoInfo = await ytdl.getInfo(videoUrl);
+                            song = {
+                                title: spotifyTrack.title,
+                                artist: spotifyTrack.artist,
+                                url: videoUrl,
+                                duration: spotifyTrack.duration,
+                                thumbnail: spotifyTrack.thumbnail,
+                                requestedBy: user.tag,
+                                spotifyUrl: spotifyTrack.url
+                            };
+                        }
+                    } catch (error) {
+                        console.error('Error using YouTube API:', error);
                     }
-                    
-                    const videoId = data.items[0].id.videoId;
-                    videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-                } catch (error) {
-                    console.error('Error using YouTube API:', error);
-                    // Fallback to basic search if API fails
-                    const searchQuery = encodeURIComponent(query);
-                    videoUrl = `https://www.youtube.com/results?search_query=${searchQuery}`;
-                    
-                    const response = await fetch(videoUrl);
-                    const html = await response.text();
-                    
-                    const videoIdMatch = html.match(/"videoId":"([^"]+)"/);
-                    if (!videoIdMatch) {
-                        throw new Error('No results found!');
-                    }
-                    
-                    videoUrl = `https://www.youtube.com/watch?v=${videoIdMatch[1]}`;
                 }
             }
 
-            // Get video info
-            const videoInfo = await ytdl.getInfo(videoUrl);
-            const song = {
-                title: videoInfo.videoDetails.title,
-                url: videoInfo.videoDetails.video_url,
-                duration: videoInfo.videoDetails.lengthSeconds,
-                requestedBy: user.tag
-            };
+            // If Spotify search failed or it's a direct YouTube URL, use YouTube
+            if (!song) {
+                if (!ytdl.validateURL(query)) {
+                    try {
+                        const searchQuery = encodeURIComponent(query);
+                        const apiUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${searchQuery}&type=video&key=${config.youtube.apiKey}&maxResults=1`;
+                        
+                        const response = await fetch(apiUrl);
+                        const data = await response.json();
+                        
+                        if (!data.items || data.items.length === 0) {
+                            throw new Error('No results found!');
+                        }
+                        
+                        const videoId = data.items[0].id.videoId;
+                        const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+                        
+                        // Get video info
+                        const videoInfo = await ytdl.getInfo(videoUrl);
+                        song = {
+                            title: videoInfo.videoDetails.title,
+                            url: videoUrl,
+                            duration: videoInfo.videoDetails.lengthSeconds,
+                            thumbnail: videoInfo.videoDetails.thumbnails[0].url,
+                            requestedBy: user.tag
+                        };
+                    } catch (error) {
+                        console.error('Error using YouTube API:', error);
+                        throw new Error('No results found!');
+                    }
+                } else {
+                    // Direct YouTube URL
+                    const videoInfo = await ytdl.getInfo(query);
+                    song = {
+                        title: videoInfo.videoDetails.title,
+                        url: videoInfo.videoDetails.video_url,
+                        duration: videoInfo.videoDetails.lengthSeconds,
+                        thumbnail: videoInfo.videoDetails.thumbnails[0].url,
+                        requestedBy: user.tag
+                    };
+                }
+            }
 
             console.log(`Found song: ${song.title}`);
             queue.songs.push(song);
@@ -153,7 +282,9 @@ class MusicService {
             // Create and send playing embed
             const playingEmbed = {
                 title: queue.playing ? '🎵 Added to Queue' : '🎵 Now Playing',
-                description: `[${song.title}](${song.url})`,
+                description: song.artist 
+                    ? `[${song.title} - ${song.artist}](${song.spotifyUrl || song.url})`
+                    : `[${song.title}](${song.url})`,
                 fields: [
                     {
                         name: 'Duration',
@@ -173,14 +304,13 @@ class MusicService {
                 ],
                 color: 0x00ff00,
                 thumbnail: {
-                    url: videoInfo.videoDetails.thumbnails[0].url
+                    url: song.thumbnail
                 }
             };
 
             // Send the embed
             await context.channel.send({ embeds: [playingEmbed] });
 
-            // Join voice channel if not already connected
             if (!queue.connection) {
                 console.log('Joining voice channel...');
                 const connection = joinVoiceChannel({
@@ -198,13 +328,6 @@ class MusicService {
                     console.log(`Player state changed: ${oldState.status} -> ${newState.status}`);
                     if (newState.status === 'idle') {
                         this.handleSongEnd(context, queue);
-                    } else if (newState.status === 'autopaused') {
-                        // Check if there are listeners in the voice channel
-                        const listeners = voiceChannel.members.filter(member => !member.user.bot).size;
-                        if (listeners > 0) {
-                            console.log('Resuming playback as there are listeners in the channel');
-                            player.unpause();
-                        }
                     }
                 });
 
@@ -213,7 +336,6 @@ class MusicService {
                 });
             }
 
-            // Play the song if not already playing
             if (!queue.playing) {
                 console.log('Starting playback...');
                 await this.playSong(context, queue);
@@ -236,7 +358,6 @@ class MusicService {
         if (queue.songs.length === 0) {
             if (queue.connection) {
                 try {
-                    // Check if the connection is still valid before destroying
                     if (queue.connection.state.status !== 'destroyed') {
                         queue.connection.destroy();
                     }
@@ -253,12 +374,13 @@ class MusicService {
 
         const song = queue.songs[0];
         try {
+            // Always use YouTube URL for streaming
             const stream = ytdl(song.url, {
                 filter: 'audioonly',
                 quality: 'highestaudio',
                 highWaterMark: 1 << 25
             });
-
+            
             const resource = createAudioResource(stream);
             const player = this.players.get(context?.guild?.id);
             if (player) {
