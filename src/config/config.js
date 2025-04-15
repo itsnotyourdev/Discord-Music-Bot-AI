@@ -14,7 +14,7 @@ export const config = {
         maxVolume: 150,
         minVolume: 0,
         bufferTime: 1000,
-        quality: 'high'
+        quality: 'highest'
     },
 
     // AI configuration
@@ -48,5 +48,5 @@ export const config = {
         error: '#ff0000',
         success: '#00ff00',
         warning: '#ffff00'
-    }
+    },
 }; 

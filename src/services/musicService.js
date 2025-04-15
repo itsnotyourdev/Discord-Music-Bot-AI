@@ -98,21 +98,36 @@ class MusicService {
             
             // If the query is not a URL, search YouTube
             if (!ytdl.validateURL(query)) {
-                // Create a search URL
-                const searchQuery = encodeURIComponent(query);
-                videoUrl = `https://www.youtube.com/results?search_query=${searchQuery}`;
-                
-                // Get the first video from search results
-                const response = await fetch(videoUrl);
-                const html = await response.text();
-                
-                // Extract the first video ID from the search results
-                const videoIdMatch = html.match(/"videoId":"([^"]+)"/);
-                if (!videoIdMatch) {
-                    throw new Error('No results found!');
+                try {
+                    // Use YouTube Data API v3 for faster search
+                    const searchQuery = encodeURIComponent(query);
+                    const apiUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${searchQuery}&type=video&key=${config.youtube.apiKey}&maxResults=1`;
+                    
+                    const response = await fetch(apiUrl);
+                    const data = await response.json();
+                    
+                    if (!data.items || data.items.length === 0) {
+                        throw new Error('No results found!');
+                    }
+                    
+                    const videoId = data.items[0].id.videoId;
+                    videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+                } catch (error) {
+                    console.error('Error using YouTube API:', error);
+                    // Fallback to basic search if API fails
+                    const searchQuery = encodeURIComponent(query);
+                    videoUrl = `https://www.youtube.com/results?search_query=${searchQuery}`;
+                    
+                    const response = await fetch(videoUrl);
+                    const html = await response.text();
+                    
+                    const videoIdMatch = html.match(/"videoId":"([^"]+)"/);
+                    if (!videoIdMatch) {
+                        throw new Error('No results found!');
+                    }
+                    
+                    videoUrl = `https://www.youtube.com/watch?v=${videoIdMatch[1]}`;
                 }
-                
-                videoUrl = `https://www.youtube.com/watch?v=${videoIdMatch[1]}`;
             }
 
             // Get video info
